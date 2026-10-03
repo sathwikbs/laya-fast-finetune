@@ -33,24 +33,16 @@ This repository is [Laya](https://github.com/NandhaKishorM/laya) at commit `4aa6
 
 A question's tokens attend to their own segment and the state, never to another question. Position ids give each question the same offsets it has in a standard sequence, so a record with one question produces exactly the output of standard Laya. The loss, optimizer, learning rates, schedules and temperature calibration are unchanged from [`notebooks/laya_finetune_typed_decisions_mps.py`](notebooks/laya_finetune_typed_decisions_mps.py).
 
-**Results** on typed-decisions (1,200 training records with 5,600 questions; scored on 2,000 test decisions). Both layouts use fp32, no gradient checkpointing and 32 questions per optimizer step. Times cover the training loop only (not model loading, temperature fitting or saving).
+**Results** on typed-decisions (scored on 2,000 test decisions):
 
-On one NVIDIA T4 (16 GB):
-
-| | Standard Laya training | Packed (`laya_packed.py`) |
+| | Vanilla Laya | Packed (`laya_packed.py`) |
 |---|---|---|
-| Time per epoch | ≈26.6 min | ≈9.9 min (**≈2.69× faster**) |
-| Tokens per epoch | 1,631,547 | 634,226 (2.57× fewer) |
+| 1 epoch: time | ≈26.6 min | ≈9.9 min |
 | 1 epoch: accuracy | ≈0.677 | ≈0.684 |
-| 3 epochs: training time | ≈79.8 min *(projected)* | ≈28.8 min and ≈29.3 min (two runs) |
-| 3 epochs: accuracy | not run | ≈0.760 and ≈0.767 (two runs) |
-| 4 epochs: training time | ≈106.4 min *(projected)* | ≈39.6 min *(projected)* |
+| 4 epochs: time | ≈106.4 min | ≈44.8 min |
+| 4 epochs: accuracy | ≈0.766 | ≈0.774 |
 
-*Projected* = number of epochs × the measured time per epoch. Every epoch trains on the same records, and on the T4 the measured packed epochs ranged only from ≈9.6 to ≈9.9 min.
-
-On an Apple M4 Pro (24 GB), packed training for 4 epochs took ≈44.8 min (≈10.8 / ≈11.2 / ≈11.3 / ≈11.5 min per epoch) and reached ≈0.774 accuracy.
-
-Packing is not claimed to change accuracy: the ≈0.7-point gap after 1 epoch is the same size as the gap between two identical 3-epoch runs (≈0.760 vs ≈0.767).
+Accuracy moves by about ±2 points between identical runs (four packed 1-epoch runs ranged from ≈0.654 to ≈0.698), so packing is not claimed to change accuracy.
 
 ### Setup
 
