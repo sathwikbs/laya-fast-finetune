@@ -21,6 +21,138 @@
 
 </div>
 
+## Faster fine-tuning (packed layout)
+
+This repository is [Laya](https://github.com/NandhaKishorM/laya) at commit `4aa6761` (Apache-2.0) with one file added: [`notebooks/laya_packed.py`](notebooks/laya_packed.py). It fine-tunes Laya **≈2.69× faster per epoch** using the same training recipe. Apart from this README section, no other Laya file is changed. Laya itself is the work of its original authors; see [Credits](#credits).
+
+**What it changes.** Laya's training script encodes every (question, state) pair as its own sequence, so a record with five questions encodes its state five times. `laya_packed.py` encodes each record once:
+
+```text
+[CLS] q1 [SEP] [MASK] opt ... [SEP]  ...  [CLS] qn [SEP] [MASK] opt ... [SEP]  state [SEP]
+```
+
+A question's tokens attend to their own segment and the state, never to another question. Position ids give each question the same offsets it has in a standard sequence, so a record with one question produces exactly the output of standard Laya. The loss, optimizer, learning rates, schedules and temperature calibration are unchanged from [`notebooks/laya_finetune_typed_decisions_mps.py`](notebooks/laya_finetune_typed_decisions_mps.py).
+
+**Results** on typed-decisions (1,200 training records with 5,600 questions; scored on 2,000 test decisions). Both layouts use fp32, no gradient checkpointing and 32 questions per optimizer step. Times cover the training loop only (not model loading, temperature fitting or saving).
+
+On one NVIDIA T4 (16 GB):
+
+| | Standard Laya training | Packed (`laya_packed.py`) |
+|---|---|---|
+| Time per epoch | ≈26.6 min | ≈9.9 min (**≈2.69× faster**) |
+| Tokens per epoch | 1,631,547 | 634,226 (2.57× fewer) |
+| 1 epoch: accuracy | ≈0.677 | ≈0.684 |
+| 3 epochs: training time | ≈79.8 min *(projected)* | ≈28.8 min and ≈29.3 min (two runs) |
+| 3 epochs: accuracy | not run | ≈0.760 and ≈0.767 (two runs) |
+| 4 epochs: training time | ≈106.4 min *(projected)* | ≈39.6 min *(projected)* |
+
+*Projected* = number of epochs × the measured time per epoch. Every epoch trains on the same records, and on the T4 the measured packed epochs ranged only from ≈9.6 to ≈9.9 min.
+
+On an Apple M4 Pro (24 GB), packed training for 4 epochs took ≈44.8 min (≈10.8 / ≈11.2 / ≈11.3 / ≈11.5 min per epoch) and reached ≈0.774 accuracy.
+
+Packing is not claimed to change accuracy: the ≈0.7-point gap after 1 epoch is the same size as the gap between two identical 3-epoch runs (≈0.760 vs ≈0.767).
+
+### Setup
+
+Requires Python 3.10+ and an NVIDIA GPU (CUDA) or an Apple Silicon GPU (MPS). The packed forward calls ModernBERT's layers directly and was tested only with the versions pinned below.
+
+```bash
+git clone https://github.com/sathwikbs/laya-fast-finetune.git && cd laya-fast-finetune
+python -m venv .venv && source .venv/bin/activate
+pip install -e . "transformers==5.18.0" "huggingface_hub==1.33.0" "tokenizers==0.23.2" "safetensors==0.8.0" pandas pyarrow
+```
+
+Download the base model and the typed-decisions dataset at the pinned revisions:
+
+```bash
+python - <<'EOF'
+from huggingface_hub import hf_hub_download
+from laya.agent import _fix_tokenizer_config
+for f in ["model.safetensors", "rl_agent_config.json", "encoder/config.json",
+          "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json"]:
+    hf_hub_download("convaiinnovations/laya", f, local_dir="laya_base",
+                    revision="55cf4c4ebb4ebe31b2550e8bdf3bd21b99753851")
+for f in ["all/train-00000-of-00001.parquet", "all/test-00000-of-00001.parquet"]:
+    hf_hub_download("LocalLLaMA/typed-decisions", f, repo_type="dataset", local_dir="typed-decisions",
+                    revision="d0e2f0c42fef86cc15d1688d25a19f5ba7c85b18")
+_fix_tokenizer_config("laya_base")
+EOF
+```
+
+### Train and evaluate
+
+```bash
+python notebooks/laya_packed.py train --epochs 3 --output-dir ./laya_packed_e3
+python notebooks/laya_packed.py eval --output-dir ./laya_packed_e3
+```
+
+`train` saves a checkpoint after every epoch to `<output-dir>/checkpoint_latest`, then writes the final model with fitted temperatures to `<output-dir>`. `eval` scores the test set and writes `eval_typed_decisions.json` to the same folder.
+
+**On Kaggle:** create a notebook with *Accelerator: GPU T4* and *Internet: on*, then run:
+
+```bash
+!pip install -q "transformers==5.18.0" "huggingface_hub==1.33.0" "tokenizers==0.23.2" "safetensors==0.8.0"
+!git clone -q https://github.com/sathwikbs/laya-fast-finetune.git ~/laya && pip install -q --no-deps -e ~/laya
+```
+
+Run the download block above in a cell that starts with `%%bash` and `cd ~/laya`, then:
+
+```bash
+!cd ~/laya && PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True python -u notebooks/laya_packed.py train --epochs 3 --output-dir /kaggle/working/laya_packed_e3
+!cd ~/laya && python -u notebooks/laya_packed.py eval --output-dir /kaggle/working/laya_packed_e3
+```
+
+Kaggle keeps only `/kaggle/working`, which is why the model is written there.
+
+**Self-test (optional):** `python notebooks/laya_packed.py check` confirms that a one-question packed record matches standard Laya exactly and that questions are isolated from each other. It needs `train_items.pt`, which Laya's own preprocessing builds:
+
+```bash
+pip install datasets
+python -c "import sys; sys.path.insert(0, 'notebooks'); import laya_finetune_typed_decisions_mps as b; b.prepare_items('./laya_base', './train_items.pt')"
+```
+
+### Train on your own data
+
+Replace `typed-decisions/all/train-00000-of-00001.parquet` with your own parquet file in the same format. It needs one row per record and three columns, each holding a JSON string:
+
+- `state`: the input that the questions are about (an object, a list, or a quoted string).
+- `questions`: `{question_id: {"type", "instructions", "criteria"}}`. `type` is `choice` (criteria `{label: description}`), `score` (criteria: a list of level descriptions, level 0 first) or `noul` (yes/no; criteria `{"false": ..., "true": ...}`, optional).
+- `gold`: `{question_id: {"probabilities": {...}}}`, keyed by label for `choice`, by `"0"`, `"1"`, ... for `score`, and by `"false"`/`"true"` for `noul`. If you have only hard labels, put `1.0` on the correct option.
+
+```python
+import json, os, pandas as pd
+rows = [{
+    "state": json.dumps({"ticket": "We were billed twice for March. Please refund the duplicate."}),
+    "questions": json.dumps({
+        "department": {"type": "choice", "instructions": "Which team should handle this?",
+                       "criteria": {"billing": "invoices, payments, refunds", "support": "product problems"}},
+        "priority": {"type": "score", "instructions": "How urgent is this?",
+                     "criteria": ["can wait", "this week", "today"]},
+        "refund": {"type": "noul", "instructions": "The customer asks for a refund."},
+    }),
+    "gold": json.dumps({
+        "department": {"probabilities": {"billing": 1.0}},
+        "priority": {"probabilities": {"0": 0.1, "1": 0.6, "2": 0.3}},
+        "refund": {"probabilities": {"false": 0.0, "true": 1.0}},
+    }),
+}]
+os.makedirs("typed-decisions/all", exist_ok=True)
+pd.DataFrame(rows).to_parquet("typed-decisions/all/train-00000-of-00001.parquet")
+```
+
+Questions without a `gold` entry are skipped. The smaller of 400 questions and 10% of all questions is held out of training to fit the temperatures. `eval` scores `typed-decisions/all/test-00000-of-00001.parquet`. To score your own test set, use the same format, add a `workflow` column (any string), and give each `gold` entry a `label`: the choice label, `"true"`/`"false"`, or the score level.
+
+### Limitations
+
+- In the packed layout, state tokens attend to every question in the record, so an answer can shift slightly depending on which other questions are asked with it.
+- `eval` scores the model in the packed layout. `laya.load()` loads the trained checkpoint, but Laya's standard `predict` encodes each question separately, and that path has not been measured with packed-trained weights.
+- Speed and accuracy were measured on one benchmark (typed-decisions).
+- Training needs a GPU: CUDA, or MPS on Apple Silicon. `profile` (a timing mode) runs only on MPS.
+
+### Credits
+
+Laya was created by Nandakishor ([@NandhaKishorM](https://github.com/NandhaKishorM)) and [Convai Innovations](https://huggingface.co/convaiinnovations): the model, its architecture, the training recipe, the base checkpoint and every file in this repository except `notebooks/laya_packed.py`. The original repository is [github.com/NandhaKishorM/laya](https://github.com/NandhaKishorM/laya), released under the Apache License 2.0 (see [LICENSE](LICENSE)). Training and evaluation use the [LocalLLaMA/typed-decisions](https://huggingface.co/datasets/LocalLLaMA/typed-decisions) dataset. This fork adds only the packed training layout. The rest of this README is Laya's own documentation.
+
 ## Installation
 
 ```bash
