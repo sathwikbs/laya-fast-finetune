@@ -38,11 +38,11 @@ A question's tokens attend to their own segment and the state, never to another 
 | | Vanilla Laya | Packed (`laya_packed.py`) |
 |---|---|---|
 | 1 epoch: time | ≈26.6 min | ≈9.9 min |
-| 1 epoch: accuracy | ≈0.677 | ≈0.684 |
+| 1 epoch: accuracy | ≈0.677 | ≈0.669 |
 | 4 epochs: time | ≈106.4 min | ≈44.8 min |
-| 4 epochs: accuracy | ≈0.766 | ≈0.774 |
+| 4 epochs: accuracy | ≈0.766 | ≈0.760 |
 
-Accuracy moves by about ±2 points between identical runs (four packed 1-epoch runs ranged from ≈0.654 to ≈0.698), so packing is not claimed to change accuracy.
+Accuracy is scored the way `laya.load().predict()` answers: one question at a time. It moves by about ±2 points between identical runs (two packed 1-epoch runs scored ≈0.658 and ≈0.681), so packing is not claimed to change accuracy.
 
 ### Setup
 
@@ -78,7 +78,7 @@ python notebooks/laya_packed.py train --epochs 3 --output-dir ./laya_packed_e3
 python notebooks/laya_packed.py eval --output-dir ./laya_packed_e3
 ```
 
-`train` saves a checkpoint after every epoch to `<output-dir>/checkpoint_latest`, then writes the final model with fitted temperatures to `<output-dir>`. `eval` scores the test set and writes `eval_typed_decisions.json` to the same folder.
+`train` saves a checkpoint after every epoch to `<output-dir>/checkpoint_latest`, then writes the final model with fitted temperatures to `<output-dir>`. `eval` scores the test set and writes `eval_typed_decisions.json` to the same folder. It scores all of a case's questions in one packed pass, which reads about 1.5–2 points higher than `laya.load().predict()` (one question at a time, the numbers in the table).
 
 **On Kaggle:** create a notebook with *Accelerator: GPU T4* and *Internet: on*, then run:
 
@@ -136,8 +136,8 @@ Questions without a `gold` entry are skipped. The smaller of 400 questions and 1
 
 ### Limitations
 
-- In the packed layout, state tokens attend to every question in the record, so an answer can shift slightly depending on which other questions are asked with it.
-- `eval` scores the model in the packed layout. `laya.load()` loads the trained checkpoint, but Laya's standard `predict` encodes each question separately, and that path has not been measured with packed-trained weights.
+- In a packed pass, the state attends to every question, so an answer can depend on which other questions are in the pass: on the 4-epoch model, packed scoring and one-at-a-time scoring gave different top answers for ≈8% of questions. `laya.load().predict()` asks one question at a time, so its answers don't depend on other questions.
+- Questions that never appear in training were not tested.
 - Speed and accuracy were measured on one benchmark (typed-decisions).
 - Training needs a GPU: CUDA, or MPS on Apple Silicon. `profile` (a timing mode) runs only on MPS.
 
