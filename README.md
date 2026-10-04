@@ -78,7 +78,7 @@ python notebooks/laya_packed.py train --epochs 3 --output-dir ./laya_packed_e3
 python notebooks/laya_packed.py eval --output-dir ./laya_packed_e3
 ```
 
-`train` saves a checkpoint after every epoch to `<output-dir>/checkpoint_latest`, then writes the final model with fitted temperatures to `<output-dir>`. `eval` scores the test set and writes `eval_typed_decisions.json` to the same folder. It scores all of a case's questions in one packed pass, which reads about 1.5–2 points higher than `laya.load().predict()` (one question at a time, the numbers in the table).
+`train` saves a checkpoint after every epoch to `<output-dir>/checkpoint_latest`, then writes the final model with fitted temperatures to `<output-dir>`. `eval` scores the test set one question at a time, as `laya.load().predict()` answers, and writes `eval_typed_decisions.json` to the same folder.
 
 **On Kaggle:** create a notebook with *Accelerator: GPU T4* and *Internet: on*, then run:
 
@@ -136,7 +136,6 @@ Questions without a `gold` entry are skipped. The smaller of 400 questions and 1
 
 ### Limitations
 
-- In a packed pass, the state attends to every question, so an answer can depend on which other questions are in the pass: on the 4-epoch model, packed scoring and one-at-a-time scoring gave different top answers for ≈8% of questions. `laya.load().predict()` asks one question at a time, so its answers don't depend on other questions.
 - Questions that never appear in training were not tested.
 - Speed and accuracy were measured on one benchmark (typed-decisions).
 - Training needs a GPU: CUDA, or MPS on Apple Silicon. `profile` (a timing mode) runs only on MPS.

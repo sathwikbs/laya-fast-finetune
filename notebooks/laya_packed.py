@@ -38,7 +38,7 @@ from safetensors.torch import load_file
 from transformers import AutoTokenizer
 
 import laya_finetune_typed_decisions_mps as base
-from laya.common import build_head, build_model, build_sequence, proper_reward, render_options, QTYPES
+from laya.common import build_head, build_model, proper_reward
 
 LAYA = Path(__file__).resolve().parent.parent
 TRAIN_PARQUET = LAYA / "typed-decisions/all/train-00000-of-00001.parquet"
@@ -457,32 +457,9 @@ def mode_eval(device, output_dir):
     import bench_local as bl
     ag = bl.laya.load(str(output_dir), device=str(device))
     ag.model.eval()
-    model, tok = ag.model, ag.tok
-    max_len, hml = ag.cfg.get("max_len", 512), ag.cfg.get("head_max_len", 192)
-    window = model.encoder.config.sliding_window
     cases, gold, wfs = bl.build_typed_decisions()
-    idx, lgs = [], []
-    t0 = time.perf_counter()
-    with torch.no_grad():
-        for ci, (state, questions) in enumerate(cases):
-            entries, slots = [], []
-            for qid, qdef in questions.items():
-                q = bl.to_internal(qdef)
-                try:
-                    ids, mk = build_sequence(tok, state, q, max_len, hml)
-                except Exception:
-                    idx.append((ci, qid, QTYPES[q["t"]], 0)); slots.append(None); continue
-                if len(mk) != len(render_options(q)):
-                    idx.append((ci, qid, QTYPES[q["t"]], 0)); slots.append(None); continue
-                head = build_head(tok, q, hml)[0]
-                entries.append({"ids": ids, "markers": mk, "qtype": QTYPES[q["t"]], "H": len(head)})
-                idx.append((ci, qid, QTYPES[q["t"]], len(mk))); slots.append(len(entries) - 1)
-            out = None
-            if entries:
-                b = collate_packed([pack(entries)], tok.pad_token_id, window, device)
-                out = packed_forward(model, b)[0].float().cpu().numpy()
-            lgs += [None if s is None else out[s, :len(entries[s]["markers"])] for s in slots]
-    secs = time.perf_counter() - t0
+    # One question at a time, as laya.load().predict() answers and bench_local.run_part_b scores.
+    lgs, idx, secs, _ = bl.score_cases(ag, cases)
     # metric code verbatim from bench_local.run_part_b
     rows, soft, brier_s, mae = [], [], [], []
     for (ci, qid, qt, k), z in zip(idx, lgs):
@@ -501,7 +478,7 @@ def mode_eval(device, output_dir):
             exp = float((np.arange(len(p)) * p).sum())
             mae.append(abs(exp - g["gold_score"]))
     m = bl.metrics(rows)
-    print(f"EVAL packed {output_dir}: n {m['n']} acc {m['accuracy']:.4f} soft {np.mean(soft):.4f} "
+    print(f"EVAL {output_dir}: n {m['n']} acc {m['accuracy']:.4f} soft {np.mean(soft):.4f} "
           f"brier {np.mean(brier_s):.4f} ECE {m['ece']:.4f} MAE {np.mean(mae):.4f} "
           f"dropped {sum(z is None for z in lgs)} ({secs:.0f}s)", flush=True)
     json.dump({"metrics": m, "soft_accuracy": float(np.mean(soft)), "brier_vs_soft": float(np.mean(brier_s)),
