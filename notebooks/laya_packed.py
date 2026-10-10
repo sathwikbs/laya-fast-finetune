@@ -1,3 +1,5 @@
+# Copyright 2026 Sathwik B S
+# SPDX-License-Identifier: Apache-2.0
 """Laya in a one-pass-per-record ("packed") layout: checks, profiling, training, evaluation.
 
 Standard Laya encodes every (question, state) pair as its own sequence, so a state with five
